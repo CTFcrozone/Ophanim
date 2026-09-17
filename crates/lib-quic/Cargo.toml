@@ -7,4 +7,4 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-# derive_more.workspace = true   # uncomment when lib-quic actually needs it
+derive_more.workspace = true
