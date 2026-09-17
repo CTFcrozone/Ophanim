@@ -8,3 +8,4 @@ workspace = true
 
 [dependencies]
 derive_more.workspace = true
+hex = "0.4.3"

@@ -22,7 +22,7 @@ impl<'a> Cursor<'a> {
             .ok_or(Error::OutOfBounds)?;
         let bytes: [u8; 4] = bytes.try_into().map_err(|_| Error::OutOfBounds)?;
         self.pos += 4;
-        Ok(u32::from_le_bytes(bytes))
+        Ok(u32::from_be_bytes(bytes))
     }
 
     pub fn slice(&mut self, n: usize) -> Result<&'a [u8]> {
