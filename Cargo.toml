@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/lib-quic"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+# unused = { level = "allow", priority = -1 } # For exploratory dev.
+
+[workspace.dependencies]
+derive_more = {version = "2", features = ["from", "display"] }

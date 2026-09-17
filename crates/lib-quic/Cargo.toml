@@ -1,0 +1,10 @@
+[package]
+name = "lib-quic"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# derive_more.workspace = true   # uncomment when lib-quic actually needs it
