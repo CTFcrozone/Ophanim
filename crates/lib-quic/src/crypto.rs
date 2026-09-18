@@ -6,14 +6,15 @@ pub const INITIAL_SALT: [u8; 20] = [
     0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17, 0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad,
     0xcc, 0xbb, 0x7f, 0x0a,
 ];
-
-pub const HKDF_INITIAL_SECRET_LABEL: &str = "client in";
-pub const HKDF_KEY_LABEL: &str = "quic key";
+// region:    --- RFC 9001 Appendix A.1 Keys
 pub const HKDF_KEY_LENGTH: usize = 16;
 pub const HKDF_IV_LENGTH: usize = 12;
 pub const HKDF_HP_LENGTH: usize = 16;
+pub const HKDF_INITIAL_SECRET_LABEL: &str = "client in";
+pub const HKDF_KEY_LABEL: &str = "quic key";
 pub const HKDF_IV_LABEL: &str = "quic iv";
 pub const HKDF_HP_LABEL: &str = "quic hp";
+// endregion: --- RFC 9001 Appendix A.1 Keys
 pub const HKDF_LABEL_PREFIX: &str = "tls13 ";
 
 pub struct InitialKeys {
