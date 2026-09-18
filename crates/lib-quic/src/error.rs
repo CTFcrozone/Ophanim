@@ -14,6 +14,8 @@ pub enum Error {
     OutOfBounds,
     NotInitial,
     Crypto,
+    NotClientHello,
+    UnexpectedFrame,
 
     // -- Externals
     #[from]

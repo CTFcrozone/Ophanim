@@ -18,6 +18,21 @@ impl<'a> Cursor<'a> {
         Ok(byte)
     }
 
+    pub fn u16(&mut self) -> Result<u16> {
+        let bytes = self
+            .buf
+            .get(self.pos..self.pos + 2)
+            .ok_or(Error::OutOfBounds)?;
+        let bytes: [u8; 2] = bytes.try_into().map_err(|_| Error::OutOfBounds)?;
+        self.pos += 2;
+        Ok(u16::from_be_bytes(bytes))
+    }
+
+    pub fn len_prefixed_u16(&mut self) -> Result<&'a [u8]> {
+        let n = self.u16()?;
+        self.slice(n as usize)
+    }
+
     pub fn u32(&mut self) -> Result<u32> {
         let bytes = self
             .buf
@@ -26,6 +41,11 @@ impl<'a> Cursor<'a> {
         let bytes: [u8; 4] = bytes.try_into().map_err(|_| Error::OutOfBounds)?;
         self.pos += 4;
         Ok(u32::from_be_bytes(bytes))
+    }
+
+    pub fn u24(&mut self) -> Result<u32> {
+        let b = self.slice(3)?;
+        Ok((b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32)
     }
 
     pub fn slice(&mut self, n: usize) -> Result<&'a [u8]> {
