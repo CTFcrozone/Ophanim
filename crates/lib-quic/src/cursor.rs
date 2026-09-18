@@ -1,4 +1,7 @@
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    consts::{VARINT_LEN_SHIFT, VARINT_VALUE_MASK},
+};
 
 pub struct Cursor<'a> {
     buf: &'a [u8],
@@ -35,5 +38,28 @@ impl<'a> Cursor<'a> {
     pub fn len_prefixed_u8(&mut self) -> Result<&'a [u8]> {
         let n = self.u8()?;
         self.slice(n as usize)
+    }
+
+    pub fn len_prefixed_varint(&mut self) -> Result<&'a [u8]> {
+        let n = self.varint()?;
+        self.slice(n as usize)
+    }
+
+    pub fn varint(&mut self) -> Result<u64> {
+        let first = self.u8()?;
+        let prefix = first >> VARINT_LEN_SHIFT; // top 2 bits
+        let len = 1usize << prefix;
+        let mut value = (first & VARINT_VALUE_MASK) as u64; // low 6 bits of first byte
+
+        // read the remaining len-1 bytes
+        for _ in 1..len {
+            let b = self.u8()?;
+            value = (value << 8) | b as u64;
+        }
+        Ok(value)
+    }
+
+    pub fn position(&self) -> usize {
+        self.pos
     }
 }

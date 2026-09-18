@@ -14,3 +14,5 @@ pub const VERSION_OFFSET: usize = 1;
 pub const VERSION_LEN: usize = 4;
 pub const DCID_LEN_OFFSET: usize = 5; // where the DCID length byte sits
 pub const FIRST_CID_OFFSET: usize = 6; // where the DCID bytes start
+pub const VARINT_VALUE_MASK: u8 = 0x3F; // 0011_1111
+pub const VARINT_LEN_SHIFT: u8 = 6; // top 2 bits >> 6 give the length class

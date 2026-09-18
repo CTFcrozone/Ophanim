@@ -12,6 +12,8 @@ pub enum Error {
     NotLongHeader,
     BadFixedBit,
     OutOfBounds,
+    NotInitial,
+    Crypto,
 
     // -- Externals
     #[from]

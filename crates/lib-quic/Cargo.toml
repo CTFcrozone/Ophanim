@@ -8,4 +8,7 @@ workspace = true
 
 [dependencies]
 derive_more.workspace = true
+ring = "0.17.14"
+
+[dev-dependencies]
 hex = "0.4.3"
