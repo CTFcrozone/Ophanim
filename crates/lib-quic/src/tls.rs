@@ -87,7 +87,10 @@ mod tests {
     type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
     use crate::{
-        crypto::{decrypt_payload, derive_initial_keys, remove_header_protection}, crypto_reassembler::CryptoReassembler, header::InitialHeader, test_helpers::packet,
+        crypto::{decrypt_payload, derive_initial_keys, remove_header_protection},
+        crypto_reassembler::CryptoReassembler,
+        header::InitialHeader,
+        test_helpers::packet,
     };
 
     use super::*;
