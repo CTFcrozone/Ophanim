@@ -1,4 +1,9 @@
-use crate::{Error, Result, consts::TLS_CLIENT_HELLO, cursor::Cursor};
+use crate::{
+    Error, Result,
+    consts::{EXT_ALPN, EXT_SNI, EXT_SUPPORTED_VERSIONS, TLS_CLIENT_HELLO},
+    cursor::Cursor,
+    support::is_grease,
+};
 
 pub struct Extension<'a> {
     pub ext_type: u16,
@@ -44,6 +49,35 @@ impl<'a> ClientHello<'a> {
             extensions,
         })
     }
+
+    pub fn tls_version(&self) -> u16 {
+        self.extensions
+            .iter()
+            .find(|e| e.ext_type == EXT_SUPPORTED_VERSIONS)
+            .and_then(|e| {
+                let list = e.data.get(1..)?; // supported_versions: u8 length prefix
+                list.chunks_exact(2)
+                    .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                    .filter(|&v| !is_grease(v))
+                    .max()
+            })
+            .unwrap_or(self.legacy_version)
+    }
+
+    pub fn first_alpn(&self) -> Option<&'a [u8]> {
+        self.extensions
+            .iter()
+            .find(|e| e.ext_type == EXT_ALPN)
+            .and_then(|e| {
+                let mut c = Cursor::new(e.data);
+                c.u16().ok()?;
+                c.len_prefixed_u8().ok()
+            })
+    }
+
+    pub fn has_sni(&self) -> bool {
+        self.extensions.iter().any(|e| e.ext_type == EXT_SNI)
+    }
 }
 
 // region:    --- Tests
@@ -53,10 +87,7 @@ mod tests {
     type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
     use crate::{
-        crypto::{decrypt_payload, derive_initial_keys, remove_header_protection},
-        crypto_frame::extract_crypto_data,
-        header::InitialHeader,
-        test_helpers::packet,
+        crypto::{decrypt_payload, derive_initial_keys, remove_header_protection}, crypto_reassembler::CryptoReassembler, header::InitialHeader, test_helpers::packet,
     };
 
     use super::*;
@@ -80,14 +111,15 @@ mod tests {
             &keys.key,
             &keys.iv,
         )?;
-        let crypto_data = extract_crypto_data(plaintext)?;
 
-        let ch = ClientHello::parse(crypto_data)?;
+        let mut reassembler = CryptoReassembler::new();
+        reassembler.feed_packet(plaintext)?;
+        let ch_bytes = reassembler.reassemble().ok_or("incomplete ClientHello")?;
+        let ch = ClientHello::parse(&ch_bytes)?;
 
-        assert_eq!(ch.legacy_version, 0x0303); // TLS 1.2 marker (1.3 negotiates via extension)
+        assert_eq!(ch.legacy_version, 0x0303);
         assert!(!ch.cipher_suites.is_empty());
         assert!(!ch.extensions.is_empty());
-        // QUIC transport parameters extension (0x0039) must be present in a QUIC CH
         assert!(ch.extensions.iter().any(|e| e.ext_type == 0x0039));
         Ok(())
     }

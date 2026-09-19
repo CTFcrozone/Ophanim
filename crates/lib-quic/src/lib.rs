@@ -1,9 +1,11 @@
 mod consts;
 mod crypto;
-mod crypto_frame;
+mod crypto_reassembler;
 mod cursor;
 mod error;
 mod header;
+mod ja4;
+mod support;
 mod tls;
 
 #[cfg(test)]
