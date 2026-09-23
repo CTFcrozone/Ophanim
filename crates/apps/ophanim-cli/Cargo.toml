@@ -1,0 +1,13 @@
+[package]
+name = "ophanim-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lib-quic = { path="../../libs/lib-quic" }
+pcap = {workspace=true}
+derive_more = {workspace=true}
+clap = {workspace = true}
+tokio = {workspace=true}
+hex = {workspace=true}
+pnet_packet = "0.35.0"

@@ -10,5 +10,4 @@ workspace = true
 aes = "0.9.3"
 derive_more.workspace = true
 ring = "0.17.14"
-hex = "0.4.3"
-
+hex = {workspace=true}
