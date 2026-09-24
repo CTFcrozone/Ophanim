@@ -108,8 +108,11 @@ pub fn decrypt_payload<'a>(
 	key: &[u8],
 	iv: &[u8],
 ) -> Result<&'a [u8]> {
-	let payload_start = payload_offset + pn_len;
-	let ct_len = (length as usize) - pn_len; // ciphertext + tag len
+	let payload_start = payload_offset.checked_add(pn_len).ok_or(Error::OutOfBounds)?;
+	let ct_len = (length as usize).checked_sub(pn_len).ok_or(Error::OutOfBounds)?; // ciphertext + tag len
+	if payload_start > packet.len() {
+		return Err(Error::OutOfBounds);
+	}
 	let (header, rest) = packet.split_at_mut(payload_start);
 	let ciphertext = rest.get_mut(..ct_len).ok_or(Error::OutOfBounds)?;
 	let unbound = UnboundKey::new(&AES_128_GCM, key).map_err(|_| Error::Crypto)?;
