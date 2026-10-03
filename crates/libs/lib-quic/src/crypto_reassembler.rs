@@ -54,7 +54,6 @@ impl CryptoReassembler {
 
 #[cfg(test)]
 mod tests {
-	type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
 	use super::*;
 

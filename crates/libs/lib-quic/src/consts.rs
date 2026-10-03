@@ -2,13 +2,8 @@
 //   7      6      5 4          3 0
 //   form | fixed | packet type | type-specific
 pub(crate) const HEADER_FORM_BIT: u8 = 0x80; // bit 7  - 1 = long header
-pub(crate) const FIXED_BIT: u8 = 0x40; // bit 6  - always 1 in valid QUIC
 pub(crate) const PACKET_TYPE_MASK: u8 = 0x30; // bits 5-4
 pub(crate) const PACKET_TYPE_SHIFT: u8 = 4; // shift the masked type down to 0..=3
-pub(crate) const PKT_INITIAL: u8 = 0;
-pub(crate) const PKT_ZERO_RTT: u8 = 1;
-pub(crate) const PKT_HANDSHAKE: u8 = 2;
-pub(crate) const PKT_RETRY: u8 = 3;
 pub(crate) const VARINT_VALUE_MASK: u8 = 0x3F; // 0011_1111
 pub(crate) const VARINT_LEN_SHIFT: u8 = 6; // top 2 bits >> 6 give the length class
 // Header protection (RFC 9001 §5.4.1)
@@ -44,3 +39,6 @@ pub(crate) const EXT_SNI: u16 = 0x0000;
 pub(crate) const EXT_ALPN: u16 = 0x0010;
 pub(crate) const EXT_SIGNATURE_ALGORITHMS: u16 = 0x000d;
 pub(crate) const EXT_SUPPORTED_VERSIONS: u16 = 0x002b;
+pub(crate) const V1: u32 = 0x0000_0001;
+pub(crate) const V2: u32 = 0x6b33_43cf;
+pub(crate) const MAX_CID_LEN: usize = 20;

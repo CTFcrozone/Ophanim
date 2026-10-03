@@ -16,6 +16,7 @@ pub enum Error {
 	Crypto,
 	NotClientHello,
 	UnexpectedFrame,
+	BadConnectionIdLength,
 
 	// -- Externals
 	#[from]

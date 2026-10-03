@@ -17,6 +17,8 @@ use pnet_packet::{
 	ipv6::Ipv6Packet,
 	udp::UdpPacket,
 };
+use tokio::signal;
+use tracing::{debug, info};
 
 use crate::{
 	Error, Result,
@@ -30,7 +32,9 @@ pub struct QuicSummary {
 	pub initial_packets: usize,
 	pub handshake_packets: usize,
 	pub zero_rtt_packets: usize,
+	pub version_negotiation_packets: usize,
 	pub retry_packets: usize,
+	pub unknown_packets: usize,
 	pub dcid: String,
 	pub scid: String,
 }
@@ -59,15 +63,66 @@ pub struct ConnFingerprint {
 	pub extensions: usize,
 }
 
-pub fn execute() -> Result<()> {
+pub async fn execute() -> Result<()> {
 	let cli = CliCmd::parse();
 
-	match cli.command {
-		Mode::Summary => summary(&cli.path),
-		Mode::Tls => tls(&cli.path),
-		Mode::Ja4 => ja4(&cli.path),
-		Mode::Verbose => verbose(&cli.path),
+	match &cli.command {
+		Mode::Summary => summary(cli.path()?),
+		Mode::Tls => tls(cli.path()?),
+		Mode::Ja4 => ja4(cli.path()?),
+		Mode::Verbose => verbose(cli.path()?),
+		Mode::Live => live_capture().await,
 	}
+}
+
+async fn live_capture() -> Result<()> {
+	let device = pcap::Device::lookup()?.ok_or(Error::custom("No device available"))?;
+	info!("Using device {}", device.name);
+
+	let mut cap = pcap::Capture::from_device(device)?.immediate_mode(true).timeout(100).open()?;
+
+	let linktype = cap.get_datalink();
+	info!("Link type: {linktype:?}");
+	if linktype != pcap::Linktype::ETHERNET {
+		return Err(Error::custom(format!("unsupported link type: {linktype:?}")));
+	}
+
+	cap.filter("udp port 443", true)?;
+
+	let break_handle = cap.breakloop_handle();
+
+	let capture = tokio::task::spawn_blocking(move || -> Result<()> {
+		let mut packet_number = 0usize;
+		let mut datagram_number = 0usize;
+		loop {
+			match cap.next_packet() {
+				Ok(packet) => {
+					let Some(data) = udp_payload(packet.data) else {
+						continue;
+					};
+					for_each_long_header(&data, |idx, header| {
+						if idx == 0 {
+							datagram_number += 1;
+						}
+						packet_number += 1;
+						print_header(datagram_number, idx, packet_number, header);
+					});
+				}
+				Err(pcap::Error::TimeoutExpired) => continue,
+				Err(pcap::Error::NoMorePackets) => return Ok(()),
+				Err(e) => return Err(e.into()),
+			}
+		}
+	});
+
+	tokio::spawn(async move {
+		let _ = signal::ctrl_c().await;
+		break_handle.breakloop();
+	});
+
+	capture.await??;
+
+	Ok(())
 }
 
 // region:    --- Packet helpers
@@ -130,7 +185,6 @@ fn feed_initial(
 // endregion: --- Packet helpers
 
 // region:    --- Executors
-
 fn collect_fingerprints(path: &Path, mut on_packet: impl FnMut(&[u8])) -> Result<Vec<ConnFingerprint>> {
 	let mut cap = Capture::from_file(path)?;
 	let mut reassemblers: HashMap<Vec<u8>, CryptoReassembler> = HashMap::new();
@@ -145,7 +199,13 @@ fn collect_fingerprints(path: &Path, mut on_packet: impl FnMut(&[u8])) -> Result
 			if done.contains(&dcid) {
 				continue;
 			}
-			let ch = ClientHello::parse(&ch_bytes)?;
+			// Mark done up front: a bad ClientHello shouldn't be retried on every later packet
+			done.insert(dcid.clone());
+
+			let Ok(ch) = ClientHello::parse(&ch_bytes) else {
+				debug!("Skipping unparsable ClientHello for dcid {}", hex::encode(&dcid));
+				continue;
+			};
 			out.push(ConnFingerprint {
 				dcid: hex::encode(&dcid),
 				ja4: lib_quic::ja4(&ch),
@@ -155,7 +215,6 @@ fn collect_fingerprints(path: &Path, mut on_packet: impl FnMut(&[u8])) -> Result
 				cipher_suites: ch.cipher_suites.len() / 2,
 				extensions: ch.extensions.len(),
 			});
-			done.insert(dcid);
 		}
 	}
 	Ok(out)
@@ -170,7 +229,6 @@ pub fn ja4(path: &Path) -> Result<()> {
 	}
 	Ok(())
 }
-
 pub fn tls(path: &Path) -> Result<()> {
 	let fps = collect_fingerprints(path, |_| {})?;
 	let Some(fp) = fps.first() else {
@@ -179,25 +237,25 @@ pub fn tls(path: &Path) -> Result<()> {
 	print_tls(fp);
 	Ok(())
 }
-
 pub fn summary(path: &Path) -> Result<()> {
 	let mut quic = QuicSummary::default();
 	let mut first_ids: Option<(String, String, u32)> = None;
 
 	let fps = collect_fingerprints(path, |data| {
-		let mut cursor = lib_quic::Cursor::new(data);
-		if let Ok(header) = lib_quic::LongHeader::parse(&mut cursor) {
+		for_each_long_header(data, |_, header| {
 			quic.packets += 1;
 			match header.packet_type {
 				PacketType::Initial => quic.initial_packets += 1,
 				PacketType::Handshake => quic.handshake_packets += 1,
 				PacketType::ZeroRtt => quic.zero_rtt_packets += 1,
 				PacketType::Retry => quic.retry_packets += 1,
+				PacketType::VersionNegotiation => quic.version_negotiation_packets += 1,
+				PacketType::Unknown => quic.unknown_packets += 1,
 			}
 			if first_ids.is_none() {
 				first_ids = Some((hex::encode(header.dcid), hex::encode(header.scid), header.version));
 			}
-		}
+		});
 	})?;
 
 	if let Some((dcid, scid, version)) = first_ids {
@@ -223,39 +281,65 @@ pub fn summary(path: &Path) -> Result<()> {
 	print_summary(&Summary { quic, tls, ja4 });
 	Ok(())
 }
-
 pub fn verbose(path: &Path) -> Result<()> {
 	let mut cap = Capture::from_file(path)?;
+	let mut datagram_number = 0usize;
 	let mut packet_number = 0usize;
 
 	while let Ok(packet) = cap.next_packet() {
 		let Some(data) = udp_payload(packet.data) else {
 			continue;
 		};
-		packet_number += 1;
-
-		println!("Packet #{packet_number}");
-		println!("────────────────────────────────");
-
-		let mut cursor = lib_quic::Cursor::new(&data);
-		match lib_quic::LongHeader::parse(&mut cursor) {
-			Ok(header) => {
-				println!(" QUIC Version : {}", header.version);
-				println!(" Type         : {:?}", header.packet_type);
-				println!(" DCID         : {}", hex::encode(header.dcid));
-				println!(" SCID         : {}", hex::encode(header.scid));
+		for_each_long_header(&data, |idx, header| {
+			if idx == 0 {
+				datagram_number += 1;
 			}
-			Err(err) => println!(" Not a QUIC long header: {err}"),
-		}
-		println!();
+			packet_number += 1;
+			print_header(datagram_number, idx, packet_number, header);
+		});
 	}
 
 	Ok(())
 }
+fn for_each_long_header(data: &[u8], mut f: impl FnMut(usize, &lib_quic::LongHeader<'_>)) {
+	let mut cursor = lib_quic::Cursor::new(data);
+	let mut idx = 0usize;
 
+	while cursor.remaining() > 0 {
+		let Ok(header) = lib_quic::LongHeader::parse(&mut cursor) else {
+			break;
+		};
+		f(idx, &header);
+		idx += 1;
+
+		// No Length field (Retry, VN) or unknown layout (RFC 8999 §5): can't find the next packet
+		if matches!(
+			header.packet_type,
+			PacketType::Retry | PacketType::VersionNegotiation | PacketType::Unknown
+		) {
+			break;
+		}
+		let Ok(len) = usize::try_from(header.length) else {
+			break;
+		};
+		if cursor.slice(len).is_err() {
+			break;
+		}
+	}
+}
 // endregion: --- Executors
 
 // region:    --- Display
+fn print_header(datagram: usize, idx: usize, n: usize, header: &lib_quic::LongHeader<'_>) {
+	println!();
+	println!("Packet #{n}");
+	println!("────────────────────────────────");
+	println!(" Datagram     : {datagram} (packet {} in datagram)", idx + 1);
+	println!(" QUIC Version : {}", header.version);
+	println!(" Type         : {:?}", header.packet_type);
+	println!(" DCID         : {}", hex::encode(header.dcid));
+	println!(" SCID         : {}", hex::encode(header.scid));
+}
 fn print_summary(summary: &Summary) {
 	println!("Ophanim - QUIC Summary");
 	println!("════════════════════════════════════");
@@ -271,6 +355,8 @@ fn print_summary(summary: &Summary) {
 	println!("  0-RTT          {}", summary.quic.zero_rtt_packets);
 	println!("  Handshake      {}", summary.quic.handshake_packets);
 	println!("  Retry          {}", summary.quic.retry_packets);
+	println!("  Version Neg.   {}", summary.quic.version_negotiation_packets);
+	println!("  Unknown        {}", summary.quic.unknown_packets);
 	if let Some(tls) = &summary.tls {
 		println!();
 		println!("TLS");
@@ -297,7 +383,6 @@ fn print_tls(fp: &ConnFingerprint) {
 	println!("  Extensions      {}", fp.extensions);
 	println!("  SNI             {}", if fp.sni { "yes" } else { "no" });
 }
-// endregion: --- Display
 fn tls_version_string(version: u16) -> String {
 	match version {
 		0x0304 => "TLS 1.3".to_string(),
@@ -305,5 +390,31 @@ fn tls_version_string(version: u16) -> String {
 		0x0302 => "TLS 1.1".to_string(),
 		0x0301 => "TLS 1.0".to_string(),
 		_ => format!("0x{version:04x}"),
+	}
+}
+// endregion: --- Display
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn walks_coalesced_packets() {
+		// Handshake (Length 2) followed by Initial (empty token, Length 1)
+		let datagram = [
+			0xe0, 0, 0, 0, 1, 0, 0, 0x02, 0xaa, 0xbb, // Handshake
+			0xc0, 0, 0, 0, 1, 0, 0, 0, 0x01, 0xcc, // Initial
+		];
+		let mut seen = Vec::new();
+		for_each_long_header(&datagram, |idx, h| seen.push((idx, format!("{:?}", h.packet_type))));
+		assert_eq!(seen, [(0, "Handshake".to_string()), (1, "Initial".to_string())]);
+	}
+
+	#[test]
+	fn stops_on_truncated_length() {
+		let datagram = [0xe0, 0, 0, 0, 1, 0, 0, 0x3f, 0xaa];
+		let mut n = 0;
+		for_each_long_header(&datagram, |_, _| n += 1);
+		assert_eq!(n, 1);
 	}
 }

@@ -1,8 +1,5 @@
 use crate::{
-	consts::{
-		FIXED_BIT, HEADER_FORM_BIT, PACKET_TYPE_MASK, PACKET_TYPE_SHIFT, PKT_HANDSHAKE, PKT_INITIAL, PKT_RETRY,
-		PKT_ZERO_RTT,
-	},
+	consts::{HEADER_FORM_BIT, MAX_CID_LEN, PACKET_TYPE_MASK, PACKET_TYPE_SHIFT, V1, V2},
 	cursor::Cursor,
 	error::{Error, Result},
 };
@@ -13,6 +10,8 @@ pub enum PacketType {
 	ZeroRtt,
 	Handshake,
 	Retry,
+	VersionNegotiation,
+	Unknown,
 }
 
 #[derive(Debug, PartialEq)]
@@ -21,6 +20,8 @@ pub struct LongHeader<'a> {
 	pub packet_type: PacketType,
 	pub dcid: &'a [u8],
 	pub scid: &'a [u8],
+	pub token: &'a [u8], // Initial only, empty otherwise
+	pub length: u64,     // pn + payload length; 0 for Retry / Version Negotiation
 }
 
 pub struct InitialHeader<'a> {
@@ -37,8 +38,8 @@ impl<'a> InitialHeader<'a> {
 		if long.packet_type != PacketType::Initial {
 			return Err(Error::NotInitial);
 		}
-		let token = c.len_prefixed_varint()?;
-		let length = c.varint()?;
+		let token = long.token;
+		let length = long.length;
 		let payload_offset = c.position();
 		Ok(InitialHeader {
 			long,
@@ -55,26 +56,49 @@ impl<'a> LongHeader<'a> {
 		if byte0 & HEADER_FORM_BIT == 0 {
 			return Err(Error::NotLongHeader);
 		}
-		if byte0 & FIXED_BIT == 0 {
-			return Err(Error::BadFixedBit);
-		}
-
-		let packet_type = match (byte0 & PACKET_TYPE_MASK) >> PACKET_TYPE_SHIFT {
-			PKT_INITIAL => PacketType::Initial,
-			PKT_ZERO_RTT => PacketType::ZeroRtt,
-			PKT_HANDSHAKE => PacketType::Handshake,
-			PKT_RETRY => PacketType::Retry,
-			_ => unreachable!(),
-		};
 
 		let version = c.u32()?;
+
+		let type_bits = (byte0 & PACKET_TYPE_MASK) >> PACKET_TYPE_SHIFT;
+		let packet_type = match version {
+			0 => PacketType::VersionNegotiation,
+			V1 => match type_bits {
+				0 => PacketType::Initial,
+				1 => PacketType::ZeroRtt,
+				2 => PacketType::Handshake,
+				_ => PacketType::Retry,
+			},
+			V2 => match type_bits {
+				1 => PacketType::Initial,
+				2 => PacketType::ZeroRtt,
+				3 => PacketType::Handshake,
+				_ => PacketType::Retry,
+			},
+			_ => PacketType::Unknown,
+		};
+
 		let dcid = c.len_prefixed_u8()?;
 		let scid = c.len_prefixed_u8()?;
+
+		if matches!(version, V1 | V2) && (dcid.len() > MAX_CID_LEN || scid.len() > MAX_CID_LEN) {
+			return Err(Error::BadConnectionIdLength);
+		}
+		let (token, length) = match packet_type {
+			PacketType::Initial => {
+				let token = c.len_prefixed_varint()?;
+				(token, c.varint()?)
+			}
+			PacketType::ZeroRtt | PacketType::Handshake => (&[][..], c.varint()?),
+			PacketType::Retry | PacketType::VersionNegotiation | PacketType::Unknown => (&[][..], 0),
+		};
+
 		Ok(LongHeader {
 			version,
 			packet_type,
 			dcid,
 			scid,
+			token,
+			length,
 		})
 	}
 }
@@ -104,6 +128,47 @@ mod tests {
 
 		assert_eq!(header.scid, &[]);
 		Ok(())
+	}
+
+	#[test]
+	fn parses_v2_initial_header() -> Result<()> {
+		// RFC 9369 A.2, protected header only
+		let buf = [
+			0xd7, 0x6b, 0x33, 0x43, 0xcf, 0x08, 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08, 0x00, 0x00, 0x44, 0x9e,
+		];
+		let hdr = InitialHeader::parse(&buf)?;
+		assert_eq!(hdr.long.version, V2);
+		assert_eq!(hdr.long.packet_type, PacketType::Initial);
+		assert_eq!(hdr.length, 1182);
+		assert_eq!(hdr.payload_offset, 18);
+		Ok(())
+	}
+
+	#[test]
+	fn version_negotiation_and_unknown_versions() -> Result<()> {
+		// VN with the fixed bit clear
+		let vn = [0x80, 0, 0, 0, 0, 0x01, 0xaa, 0x01, 0xbb, 0, 0, 0, 1];
+		let h = LongHeader::parse(&mut Cursor::new(&vn))?;
+		assert_eq!(h.packet_type, PacketType::VersionNegotiation);
+		assert_eq!(h.dcid, &[0xaa]);
+
+		// Greased version: only the CIDs are parsed
+		let grease = [0xc0, 0x1a, 0x2a, 0x3a, 0x4a, 0x01, 0xaa, 0x01, 0xbb, 0xff];
+		let h = LongHeader::parse(&mut Cursor::new(&grease))?;
+		assert_eq!(h.packet_type, PacketType::Unknown);
+		assert_eq!(h.length, 0);
+		Ok(())
+	}
+
+	#[test]
+	fn rejects_long_cid_on_v1_only() {
+		let mut buf = vec![0xc0, 0, 0, 0, 1, 21];
+		buf.extend([0u8; 21]);
+		buf.extend([0, 0, 0]);
+		assert!(LongHeader::parse(&mut Cursor::new(&buf)).is_err());
+
+		buf[1..5].copy_from_slice(&[0x1a, 0x2a, 0x3a, 0x4a]);
+		assert!(LongHeader::parse(&mut Cursor::new(&buf)).is_ok());
 	}
 
 	#[test]

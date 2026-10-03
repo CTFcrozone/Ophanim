@@ -20,6 +20,10 @@ pub enum Error {
 	#[from]
 	Pcap(pcap::Error),
 
+	#[display("Task failed to execute to completion: {_0}")]
+	#[from]
+	Join(tokio::task::JoinError),
+
 	#[display("I/O error: {_0}")]
 	#[from]
 	Io(std::io::Error),
